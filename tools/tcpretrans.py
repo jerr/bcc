@@ -45,6 +45,8 @@ debug = 0
 # define BPF program
 bpf_text = """
 #include <uapi/linux/ptrace.h>
+#define KBUILD_MODNAME "foo"
+#include <linux/tcp.h>
 #include <net/sock.h>
 #include <bcc/proto.h>
 
@@ -61,6 +63,47 @@ struct ipv4_data_t {
     u16 dport;
     u64 state;
     u64 type;
+    u32 snd_wnd;    /* The window we expect to receive	*/
+    u64	rx_b;	    /* The total number of data bytes received acked (bytes_received) */
+	u64	tx_b;       /* The total number of data bytes sent acked (bytes_acked) */
+    u32	dsack_dups;	/* The total number of DSACK blocks received */
+    u32	snd_una;	/* First byte we want an ack for*/
+ 	u32	snd_sml;	/* Last byte of the most recently transmitted small packet */
+	u32	rcv_tstamp;	/* timestamp of last received ACK (for keepalives) */
+	u32	lsndtime;	/* timestamp of last sent data packet (for restart window) */
+	u32	last_oow_ack_time;  /* timestamp of last out-of-window ACK */
+    
+    u32	snd_wl1;	/* Sequence for window update		*/
+	u32	max_window;	/* Maximal window ever seen from peer	*/
+	u32	mss_cache;	/* Cached effective mss, not including SACKS */
+	u32	window_clamp;	/* Maximal window to advertise		*/
+	u32	rcv_ssthresh;	/* Current window clamp			*/
+
+    u32	snd_ssthresh;	/* Slow start size threshold		*/
+ 	u32	snd_cwnd;	/* Sending congestion window		*/
+	u32	snd_cwnd_cnt;	/* Linear increase counter		*/
+	u32	snd_cwnd_clamp; /* Do not allow snd_cwnd to grow above this */
+	u32	snd_cwnd_used;
+	u32	snd_cwnd_stamp;
+	u32	prior_cwnd;	/* cwnd right before starting loss recovery */
+	u32	prr_delivered;	/* Number of newly delivered packets to
+				 * receiver in Recovery. */
+	u32	prr_out;	/* Total number of pkts sent during Recovery. */
+	u32	delivered;	/* Total data packets delivered incl. rexmits */
+	u32	lost;		/* Total data packets lost incl. rexmits */
+	u32	app_limited;	/* limited until "delivered" reaches this val */
+	u64	first_tx_mstamp;  /* start of window send phase */
+	u64	delivered_mstamp; /* time we reached "delivered" */
+	u32	rate_delivered;    /* saved rate sample: packets delivered */
+	u32	rate_interval_us;  /* saved rate sample: time elapsed */
+
+ 	u32	rcv_wnd;	/* Current receiver window		*/
+	u32	write_seq;	/* Tail(+1) of data held in tcp send buffer */
+	u32	notsent_lowat;	/* TCP_NOTSENT_LOWAT */
+	u32	pushed_seq;	/* Last pushed seq, required to talk to windows */
+	u32	lost_out;	/* Lost packets			*/
+	u32	sacked_out;	/* SACK'd packets			*/
+	u32	fackets_out;	/* FACK'd packets			*/
 };
 BPF_PERF_OUTPUT(ipv4_events);
 
@@ -104,7 +147,7 @@ static int trace_event(struct pt_regs *ctx, struct sock *skp, int type)
     u16 lport = skp->__sk_common.skc_num;
     u16 dport = skp->__sk_common.skc_dport;
     char state = skp->__sk_common.skc_state;
-
+   
     if (family == AF_INET) {
         IPV4_INIT
         IPV4_CORE
@@ -139,9 +182,37 @@ struct_init = { 'ipv4':
                // lport is host order
                flow_key.lport = lport;
                flow_key.dport = ntohs(dport);""",
-               'trace' :
+        'trace' :
                """
                struct ipv4_data_t data4 = {};
+               // get throughput stats. see tcp_get_info().
+               struct tcp_sock *tp = (struct tcp_sock *)skp;
+
+               data4.snd_wnd = tp->snd_wnd;
+               data4.rx_b = tp->bytes_received;
+               data4.tx_b = tp->bytes_acked;
+               // data4.dsack_dups = tp->dsack_dups;
+               data4.snd_una = tp->snd_una;
+               data4.snd_sml = tp->snd_sml;
+               data4.rcv_tstamp = tp->rcv_tstamp;
+               data4.lsndtime = tp->lsndtime;
+               data4.last_oow_ack_time = tp->last_oow_ack_time;
+
+               data4.snd_wl1 = tp->snd_wl1;
+	           data4.snd_wnd = tp->snd_wnd;
+	           data4.max_window = tp->max_window;
+	           data4.mss_cache = tp->mss_cache;
+	           data4.window_clamp = tp->window_clamp;
+	           data4.rcv_ssthresh = tp->rcv_ssthresh;
+
+               data4.snd_ssthresh = tp->snd_ssthresh;
+               data4.snd_cwnd = tp->snd_cwnd;
+               data4.snd_cwnd_cnt = tp->snd_cwnd_cnt;
+               data4.snd_cwnd_clamp = tp->snd_cwnd_clamp;
+               data4.snd_cwnd_used = tp->snd_cwnd_used;
+               data4.snd_cwnd_stamp = tp->snd_cwnd_stamp;
+
+
                data4.pid = pid;
                data4.ip = 4;
                data4.type = type;
@@ -209,7 +280,28 @@ class Data_ipv4(ct.Structure):
         ("lport", ct.c_ushort),
         ("dport", ct.c_ushort),
         ("state", ct.c_ulonglong),
-        ("type", ct.c_ulonglong)
+        ("type", ct.c_ulonglong),
+        ("snd_wnd", ct.c_uint),
+        ("tx_b", ct.c_ulonglong),
+        ("rx_b", ct.c_ulonglong),
+        ("dsack_dups", ct.c_uint),
+        ("snd_una", ct.c_uint),
+        ("snd_sml", ct.c_uint),
+        ("rcv_tstamp", ct.c_uint),
+        ("lsndtime", ct.c_uint),
+        ("last_oow_ack_time", ct.c_uint),
+        ("snd_wl1", ct.c_uint),
+	    ("snd_wnd", ct.c_uint),
+	    ("max_window", ct.c_uint),
+	    ("mss_cache", ct.c_uint),
+	    ("window_clamp", ct.c_uint),
+	    ("rcv_ssthresh", ct.c_uint),
+        ("snd_ssthresh", ct.c_uint),
+        ("snd_cwnd", ct.c_uint),
+        ("snd_cwnd_cnt", ct.c_uint),
+        ("snd_cwnd_clamp", ct.c_uint),
+        ("snd_cwnd_used", ct.c_uint),
+        ("snd_cwnd_stamp", ct.c_uint)
     ]
 
 class Data_ipv6(ct.Structure):
@@ -247,16 +339,37 @@ tcpstate[12] = 'NEW_SYN_RECV'
 # process event
 def print_ipv4_event(cpu, data, size):
     event = ct.cast(data, ct.POINTER(Data_ipv4)).contents
-    print("%-8s %-6d %-2d %-20s %1s> %-20s %s" % (
+    print("%-8s %-6d %-2d %-20s %1s> %-20s %-12s %-10d %-10d %-10d %-10d %-10d %-10d %-10d %-10d %-10d  %-10d %-10d %-10d  %-10d %-10d %-10d %-10d %-10d %-10d %-10d %-10d %-10d" % (
         strftime("%H:%M:%S"), event.pid, event.ip,
         "%s:%d" % (inet_ntop(AF_INET, pack('I', event.saddr)), event.lport),
         type[event.type],
         "%s:%s" % (inet_ntop(AF_INET, pack('I', event.daddr)), event.dport),
-        tcpstate[event.state]))
+        tcpstate[event.state],
+        event.snd_wnd,
+        event.tx_b,
+        event.rx_b,
+        event.dsack_dups,
+        event.snd_una,
+        event.snd_sml,
+        event.rcv_tstamp,
+        event.lsndtime,
+        event.last_oow_ack_time,
+        event.snd_wl1,
+	    event.snd_wnd,
+	    event.max_window,
+	    event.mss_cache,
+	    event.window_clamp,
+	    event.rcv_ssthresh,
+        event.snd_ssthresh,
+        event.snd_cwnd,
+        event.snd_cwnd_cnt,
+        event.snd_cwnd_clamp,
+        event.snd_cwnd_used,
+        event.snd_cwnd_stamp))
 
 def print_ipv6_event(cpu, data, size):
     event = ct.cast(data, ct.POINTER(Data_ipv6)).contents
-    print("%-8s %-6d %-2d %-20s %1s> %-20s %s" % (
+    print("%-8s %-6d %-2d %-20s %1s> %-20s %-12s" % (
         strftime("%H:%M:%S"), event.pid, event.ip,
         "%s:%d" % (inet_ntop(AF_INET6, event.saddr), event.lport),
         type[event.type],
@@ -298,8 +411,9 @@ if args.count:
 # read events
 else:
     # header
-    print("%-8s %-6s %-2s %-20s %1s> %-20s %-4s" % ("TIME", "PID", "IP",
-        "LADDR:LPORT", "T", "RADDR:RPORT", "STATE"))
+    print("%-8s %-6s %-2s %-20s %1s> %-20s %-12s %-10s %-10s %-10s %-10s %-10s %-10s %-10s %-10s %-10s" % ("TIME", "PID", "IP",
+        "LADDR:LPORT", "T", "RADDR:RPORT", "STATE", "snd_wnd", "tx_b", "rx_b", "dsack_dups", "snd_una", "snd_sml", "rcv_tstamp", "lsndtime" , "last_oow_ack_time"))
+
     b["ipv4_events"].open_perf_buffer(print_ipv4_event)
     b["ipv6_events"].open_perf_buffer(print_ipv6_event)
     while 1:
