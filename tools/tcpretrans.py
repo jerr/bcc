@@ -104,6 +104,22 @@ struct ipv4_data_t {
 	u32	lost_out;	/* Lost packets			*/
 	u32	sacked_out;	/* SACK'd packets			*/
 	u32	fackets_out;	/* FACK'd packets			*/
+    
+    u32	srtt_us;	/* smoothed round trip time << 3 in usecs */
+	u32	mdev_us;	/* medium deviation			*/
+	u32	mdev_max_us;	/* maximal mdev for the last rtt period	*/
+	u32	rttvar_us;	/* smoothed mdev_max			*/
+	u32	rtt_seq;	/* sequence number to update rttvar	*/
+    u32	packets_out;	/* Packets which are "in flight"	*/
+	u32	retrans_out;	/* Retransmitted packets out		*/
+	u32	max_packets_out;  /* max packets_out in last window */
+	u32	max_packets_seq;  /* right edge of max_packets_out flight */
+    u32	reordering;	/* Packet reordering metric.		*/
+
+    u32 rcv_rtt_est; /* Receiver side RTT estimation */
+	u32 rcvq_space; /* Receiver queue space */
+
+
 };
 BPF_PERF_OUTPUT(ipv4_events);
 
@@ -212,6 +228,39 @@ struct_init = { 'ipv4':
                data4.snd_cwnd_used = tp->snd_cwnd_used;
                data4.snd_cwnd_stamp = tp->snd_cwnd_stamp;
 
+               data4.prior_cwnd = tp->prior_cwnd;
+               data4.prr_delivered = tp->prr_delivered;
+               data4.prr_out = tp->prr_out;
+               data4.delivered = tp->delivered;
+               data4.lost= tp->lost;
+               data4.app_limited = tp->app_limited;
+               data4.first_tx_mstamp = tp->first_tx_mstamp;
+               data4.delivered_mstamp = tp->delivered_mstamp;
+               data4.rate_delivered = tp->rate_delivered;
+               data4.rate_interval_us = tp->rate_interval_us;
+
+               data4.rcv_wnd = tp->rcv_wnd;
+               data4.write_seq = tp->write_seq;
+               data4.notsent_lowat = tp->notsent_lowat;
+               data4.pushed_seq = tp->pushed_seq;
+               data4.lost_out = tp->lost_out;
+               data4.sacked_out = tp->sacked_out;
+               data4.fackets_out = tp->fackets_out;
+            
+
+               data4.srtt_us = tp->srtt_us;
+               data4.mdev_us = tp->mdev_us;
+               data4.mdev_max_us = tp->mdev_max_us;
+               data4.rttvar_us = tp->rttvar_us;
+               data4.rtt_seq = tp->rtt_seq;
+               data4.packets_out = tp->packets_out;
+               data4.retrans_out = tp->retrans_out;
+               data4.max_packets_out = tp->max_packets_out; 
+               data4.max_packets_seq = tp->max_packets_seq;
+               data4.reordering = tp->reordering;
+
+               data4.rcv_rtt_est = tp->rcv_rtt_est.rtt_us;
+               data4.rcvq_space = tp->rcvq_space.space;
 
                data4.pid = pid;
                data4.ip = 4;
@@ -301,7 +350,37 @@ class Data_ipv4(ct.Structure):
         ("snd_cwnd_cnt", ct.c_uint),
         ("snd_cwnd_clamp", ct.c_uint),
         ("snd_cwnd_used", ct.c_uint),
-        ("snd_cwnd_stamp", ct.c_uint)
+        ("snd_cwnd_stamp", ct.c_uint),
+
+        ("prior_cwnd", ct.c_uint),
+        ("prr_delivered", ct.c_uint),
+        ("prr_out", ct.c_uint),
+        ("delivered", ct.c_uint),
+        ("lost", ct.c_uint),
+        ("app_limited", ct.c_uint),
+        ("first_tx_mstamp", ct.c_ulonglong),
+        ("delivered_mstamp", ct.c_ulonglong),
+        ("rate_delivered", ct.c_uint),
+        ("rate_interval_us", ct.c_uint),
+        ("rcv_wnd", ct.c_uint),
+        ("write_seq", ct.c_uint),
+        ("notsent_lowat", ct.c_uint),
+        ("pushed_seq", ct.c_uint),
+        ("lost_out", ct.c_uint),
+        ("sacked_out", ct.c_uint),
+        ("fackets_out", ct.c_uint),
+        ("srtt_us", ct.c_uint),
+        ("mdev_us", ct.c_uint),
+        ("mdev_max_us", ct.c_uint),
+        ("rttvar_us", ct.c_uint),
+        ("rtt_seq", ct.c_uint),
+        ("packets_out", ct.c_uint),
+        ("retrans_out", ct.c_uint),
+        ("max_packets_out", ct.c_uint),
+        ("max_packets_seq", ct.c_uint),
+        ("reordering", ct.c_uint),
+        ("rcv_rtt_est", ct.c_uint),
+        ("rcvq_space", ct.c_uint)
     ]
 
 class Data_ipv6(ct.Structure):
@@ -339,7 +418,7 @@ tcpstate[12] = 'NEW_SYN_RECV'
 # process event
 def print_ipv4_event(cpu, data, size):
     event = ct.cast(data, ct.POINTER(Data_ipv4)).contents
-    print("%-8s %-6d %-2d %-20s %1s> %-20s %-12s %-10d %-10d %-10d %-10d %-10d %-10d %-10d %-10d %-10d  %-10d %-10d %-10d  %-10d %-10d %-10d %-10d %-10d %-10d %-10d %-10d %-10d" % (
+    print("%-8s %-6d %-2d %-20s %1s> %-20s %-12s %-10d %-10d %-10d %-10d %-10d %-10d %-10d %-10d %-10d %-10d %-10d %-10d %-10d %-10d %-10d %-10d %-10d %-10d %-10d %-10d %-10d  %-10d %-10d %-10d  %-10d %-10d %-10d %-10d %-10d %-10d %-10d %-10d %-10d %-10d  %-10d %-10d %-10d %-10d %-10d %-10d %-10d %-10d %-10d %-10d  %-10d %-10d %-10d %-10d %-10d %-10d" % (
         strftime("%H:%M:%S"), event.pid, event.ip,
         "%s:%d" % (inet_ntop(AF_INET, pack('I', event.saddr)), event.lport),
         type[event.type],
@@ -365,7 +444,36 @@ def print_ipv4_event(cpu, data, size):
         event.snd_cwnd_cnt,
         event.snd_cwnd_clamp,
         event.snd_cwnd_used,
-        event.snd_cwnd_stamp))
+        event.snd_cwnd_stamp,
+         event.prior_cwnd,
+         event.prr_delivered,
+         event.prr_out,
+         event.delivered,
+         event.lost,
+         event.app_limited,
+         event.first_tx_mstamp,
+         event.delivered_mstamp,
+         event.rate_delivered,
+         event.rate_interval_us,
+         event.rcv_wnd,
+         event.write_seq,
+         event.notsent_lowat,
+         event.pushed_seq,
+         event.lost_out,
+         event.sacked_out,
+         event.fackets_out,
+         event.srtt_us,
+         event.mdev_us,
+         event.mdev_max_us,
+         event.rttvar_us,
+         event.rtt_seq,
+         event.packets_out,
+         event.retrans_out,
+         event.max_packets_out, 
+         event.max_packets_seq,
+         event.reordering,
+         event.rcv_rtt_est,
+         event.rcvq_space))
 
 def print_ipv6_event(cpu, data, size):
     event = ct.cast(data, ct.POINTER(Data_ipv6)).contents
